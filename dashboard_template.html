@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SOC Triage Console</title>
+<style>
+  :root{
+    --bg:#0b0e12; --panel:#12161c; --panel2:#171c23; --border:#232a33; --border-strong:#323b47;
+    --text:#dfe6ee; --text-dim:#8b98a8; --text-mute:#5b6675;
+    --crit:#ff5c5c; --crit-bg:#3a1414; --crit-dim:#ffb3b3;
+    --high:#ff9f43; --high-bg:#3a2510; --high-dim:#ffd0a0;
+    --med:#f2c94c; --med-bg:#332c0d; --med-dim:#f5df9d;
+    --low:#5aa9e6; --low-bg:#0e2436; --low-dim:#a9d3f2;
+    --info:#8a94a3; --info-bg:#1c2028; --info-dim:#c3c9d2;
+    --ok:#3ecf8e; --ok-bg:#0d2b20;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+    font-size:14px; line-height:1.5;
+  }
+  ::selection{background:#2a4a6b;}
+
+  /* ---- top bar ---- */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px; border-bottom:1px solid var(--border); background:var(--panel);
+    position:sticky; top:0; z-index:10;
+  }
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand .dot{width:9px; height:9px; border-radius:50%; background:var(--ok); box-shadow:0 0 0 3px var(--ok-bg);}
+  .brand h1{font-size:15px; font-weight:600; margin:0; letter-spacing:.2px;}
+  .brand .sub{font-size:12px; color:var(--text-mute); font-family:var(--mono);}
+  .stats{display:flex; gap:10px;}
+  .stat{
+    display:flex; flex-direction:column; align-items:flex-end; padding:4px 12px;
+    border-left:1px solid var(--border); min-width:64px;
+  }
+  .stat .n{font-family:var(--mono); font-size:16px; font-weight:600;}
+  .stat .l{font-size:10.5px; color:var(--text-mute); text-transform:uppercase; letter-spacing:.06em;}
+  .stat.crit .n{color:var(--crit);} .stat.high .n{color:var(--high);}
+  .stat.med .n{color:var(--med);} .stat.low .n{color:var(--low);}
+  .stat.open .n{color:var(--text);}
+
+  /* ---- layout ---- */
+  .layout{display:grid; grid-template-columns:220px 1fr; min-height:calc(100vh - 57px);}
+  .sidebar{
+    border-right:1px solid var(--border); background:var(--panel); padding:18px 16px;
+    position:sticky; top:57px; align-self:start; height:calc(100vh - 57px); overflow-y:auto;
+  }
+  .sidebar h3{font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-mute); margin:0 0 8px;}
+  .filter-group{margin-bottom:22px;}
+  .chip-row{display:flex; flex-direction:column; gap:4px;}
+  .chip{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:6px 8px; border-radius:6px; cursor:pointer; font-size:12.5px;
+    border:1px solid transparent; color:var(--text-dim);
+  }
+  .chip:hover{background:var(--panel2);}
+  .chip.active{background:var(--panel2); border-color:var(--border-strong); color:var(--text);}
+  .chip .sw{width:8px; height:8px; border-radius:2px; flex-shrink:0;}
+  .chip .ct{font-family:var(--mono); font-size:11px; color:var(--text-mute); margin-left:auto;}
+  .sw.crit{background:var(--crit);} .sw.high{background:var(--high);}
+  .sw.med{background:var(--med);} .sw.low{background:var(--low);} .sw.info{background:var(--info);}
+  .sw.open{background:var(--ok);} .sw.closed{background:var(--text-mute);} .sw.forwarded{background:var(--low);}
+
+  .search{
+    width:100%; padding:8px 10px; background:var(--bg); border:1px solid var(--border);
+    border-radius:6px; color:var(--text); font-size:12.5px; font-family:var(--sans);
+  }
+  .search:focus{outline:none; border-color:var(--border-strong);}
+  .search::placeholder{color:var(--text-mute);}
+
+  /* ---- main / queue ---- */
+  .main{padding:20px 26px 60px;}
+  .queue-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
+  .queue-head h2{font-size:14px; font-weight:600; margin:0;}
+  .queue-head .count{font-size:12px; color:var(--text-mute); font-family:var(--mono);}
+
+  .ticket{
+    border:1px solid var(--border); border-left:3px solid var(--info); background:var(--panel);
+    border-radius:8px; margin-bottom:8px; overflow:hidden; transition:border-color .12s;
+  }
+  .ticket.sev-critical{border-left-color:var(--crit);}
+  .ticket.sev-high{border-left-color:var(--high);}
+  .ticket.sev-medium{border-left-color:var(--med);}
+  .ticket.sev-low{border-left-color:var(--low);}
+  .ticket.status-closed{opacity:.5;}
+  .ticket.status-forwarded{opacity:.75;}
+
+  .ticket-row{
+    display:grid; grid-template-columns:88px 1fr 130px 90px 20px;
+    align-items:center; gap:14px; padding:12px 16px; cursor:pointer;
+  }
+  .ticket-row:hover{background:var(--panel2);}
+  .sev-badge{
+    font-family:var(--mono); font-size:10.5px; font-weight:600; text-transform:uppercase;
+    letter-spacing:.04em; padding:3px 7px; border-radius:4px; text-align:center; width:fit-content;
+  }
+  .sev-badge.critical{background:var(--crit-bg); color:var(--crit-dim);}
+  .sev-badge.high{background:var(--high-bg); color:var(--high-dim);}
+  .sev-badge.medium{background:var(--med-bg); color:var(--med-dim);}
+  .sev-badge.low{background:var(--low-bg); color:var(--low-dim);}
+
+  .ticket-title{min-width:0;}
+  .ticket-title .t{font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .ticket-title .m{font-size:11.5px; color:var(--text-mute); font-family:var(--mono); margin-top:2px;}
+
+  .ticket-cat{font-size:11.5px; color:var(--text-dim);}
+  .ticket-status{font-size:11px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.04em;}
+  .ticket-status.open{color:var(--ok);}
+  .ticket-status.closed{color:var(--text-mute);}
+  .ticket-status.forwarded{color:var(--low);}
+  .chevron{color:var(--text-mute); font-size:11px; transition:transform .15s; text-align:right;}
+  .ticket.expanded .chevron{transform:rotate(90deg);}
+
+  .ticket-body{display:none; padding:0 16px 16px 16px; border-top:1px solid var(--border);}
+  .ticket.expanded .ticket-body{display:block;}
+
+  .tb-section{margin-top:14px;}
+  .tb-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--text-mute); margin-bottom:6px;}
+  .tb-desc{font-size:13px; color:var(--text); line-height:1.6;}
+  .tb-action{font-size:13px; color:var(--text-dim); line-height:1.6; padding:10px 12px; background:var(--panel2); border-radius:6px; border-left:2px solid var(--border-strong);}
+
+  .tb-meta{display:flex; flex-wrap:wrap; gap:16px; margin-top:12px; font-family:var(--mono); font-size:11.5px; color:var(--text-dim);}
+  .tb-meta span b{color:var(--text-mute); font-weight:400; margin-right:4px;}
+
+  .evidence{
+    background:#080a0d; border:1px solid var(--border); border-radius:6px; padding:10px 12px;
+    font-family:var(--mono); font-size:11px; color:#9fb0c3; max-height:160px; overflow-y:auto;
+    white-space:pre-wrap; word-break:break-all; line-height:1.6;
+  }
+  .evidence div{padding:1px 0; border-bottom:1px solid #14181e;}
+  .evidence div:last-child{border-bottom:none;}
+
+  .tb-actions{display:flex; gap:8px; margin-top:16px; align-items:center; flex-wrap:wrap;}
+  button.act{
+    font-family:var(--sans); font-size:12.5px; font-weight:500; padding:7px 14px; border-radius:6px;
+    border:1px solid var(--border-strong); background:var(--panel2); color:var(--text); cursor:pointer;
+  }
+  button.act:hover{background:var(--border);}
+  button.act.close-btn{border-color:#3ecf8e55; color:var(--ok);}
+  button.act.close-btn:hover{background:var(--ok-bg);}
+  button.act.forward-btn{border-color:#5aa9e655; color:var(--low);}
+  button.act.forward-btn:hover{background:var(--low-bg);}
+  button.act.reopen-btn{color:var(--text-dim);}
+  select.fwd-select{
+    font-family:var(--sans); font-size:12.5px; padding:6px 10px; border-radius:6px;
+    border:1px solid var(--border-strong); background:var(--bg); color:var(--text);
+  }
+  .notes-row{margin-top:10px; display:none;}
+  .notes-row.show{display:block;}
+  textarea.notes{
+    width:100%; min-height:56px; background:var(--bg); border:1px solid var(--border);
+    border-radius:6px; color:var(--text); font-family:var(--sans); font-size:12.5px; padding:8px 10px; resize:vertical;
+  }
+  textarea.notes:focus{outline:none; border-color:var(--border-strong);}
+
+  .resolved-tag{
+    display:inline-block; margin-top:10px; font-size:11.5px; font-family:var(--mono);
+    padding:4px 9px; border-radius:5px; color:var(--text-dim); background:var(--panel2);
+  }
+
+  .empty{text-align:center; padding:60px 20px; color:var(--text-mute);}
+  .empty .big{font-size:28px; margin-bottom:10px;}
+
+  ::-webkit-scrollbar{width:9px; height:9px;}
+  ::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:5px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="dot"></div>
+    <div>
+      <h1>SOC Triage Console</h1>
+      <div class="sub">firewall.log · auth.log · ids.log — classified &amp; AI-enriched</div>
+    </div>
+  </div>
+  <div class="stats" id="stats"></div>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="filter-group">
+      <h3>Search</h3>
+      <input class="search" id="searchBox" placeholder="IP, user, keyword...">
+    </div>
+
+    <div class="filter-group">
+      <h3>Severity</h3>
+      <div class="chip-row" id="sevFilters"></div>
+    </div>
+
+    <div class="filter-group">
+      <h3>Status</h3>
+      <div class="chip-row" id="statusFilters"></div>
+    </div>
+
+    <div class="filter-group">
+      <h3>Category</h3>
+      <div class="chip-row" id="catFilters"></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="queue-head">
+      <h2>Ticket queue</h2>
+      <div class="count" id="queueCount"></div>
+    </div>
+    <div id="ticketList"></div>
+  </div>
+</div>
+
+<script>
+const TICKETS = __TICKETS_JSON__;
+
+const state = {
+  tickets: TICKETS.map(t => ({...t})),
+  sevFilter: new Set(["critical","high","medium","low","info"]),
+  statusFilter: new Set(["open","closed","forwarded"]),
+  catFilter: null,
+  search: "",
+  expanded: new Set(),
+  notesOpen: new Set(),
+};
+
+const SEV_ORDER = {critical:0, high:1, medium:2, low:3, info:4};
+const TEAMS = ["Incident Response", "Network Team", "Endpoint / EDR Team", "Application Security", "Management / CISO"];
+
+function render(){
+  renderStats();
+  renderSevFilters();
+  renderStatusFilters();
+  renderCatFilters();
+  renderQueue();
+}
+
+function renderStats(){
+  const c = state.tickets;
+  const total = c.length;
+  const open = c.filter(t=>t.status==="open").length;
+  const crit = c.filter(t=>t.severity==="critical" && t.status==="open").length;
+  const high = c.filter(t=>t.severity==="high" && t.status==="open").length;
+  const closed = c.filter(t=>t.status==="closed").length;
+  document.getElementById("stats").innerHTML = `
+    <div class="stat open"><div class="n">${open}</div><div class="l">Open</div></div>
+    <div class="stat crit"><div class="n">${crit}</div><div class="l">Critical</div></div>
+    <div class="stat high"><div class="n">${high}</div><div class="l">High</div></div>
+    <div class="stat"><div class="n" style="color:var(--text-mute)">${closed}</div><div class="l">Closed</div></div>
+    <div class="stat"><div class="n" style="color:var(--text-mute)">${total}</div><div class="l">Total</div></div>
+  `;
+}
+
+function renderSevFilters(){
+  const sevs = ["critical","high","medium","low"];
+  const el = document.getElementById("sevFilters");
+  el.innerHTML = sevs.map(s => {
+    const count = state.tickets.filter(t=>t.severity===s).length;
+    const active = state.sevFilter.has(s) ? "active" : "";
+    return `<div class="chip ${active}" onclick="toggleSev('${s}')">
+      <span class="sw ${s}"></span><span style="flex:1">${s}</span><span class="ct">${count}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderStatusFilters(){
+  const statuses = ["open","closed","forwarded"];
+  const el = document.getElementById("statusFilters");
+  el.innerHTML = statuses.map(s => {
+    const count = state.tickets.filter(t=>t.status===s).length;
+    const active = state.statusFilter.has(s) ? "active" : "";
+    return `<div class="chip ${active}" onclick="toggleStatus('${s}')">
+      <span class="sw ${s}"></span><span style="flex:1">${s}</span><span class="ct">${count}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderCatFilters(){
+  const cats = [...new Set(state.tickets.map(t=>t.category))].sort();
+  const el = document.getElementById("catFilters");
+  const allActive = state.catFilter === null ? "active" : "";
+  let html = `<div class="chip ${allActive}" onclick="setCat(null)"><span style="flex:1">All</span></div>`;
+  html += cats.map(c => {
+    const count = state.tickets.filter(t=>t.category===c).length;
+    const active = state.catFilter === c ? "active" : "";
+    return `<div class="chip ${active}" onclick="setCat('${c.replace(/'/g,"\\'")}')">
+      <span style="flex:1">${c}</span><span class="ct">${count}</span>
+    </div>`;
+  }).join("");
+  el.innerHTML = html;
+}
+
+function matchesFilters(t){
+  if(!state.sevFilter.has(t.severity)) return false;
+  if(!state.statusFilter.has(t.status)) return false;
+  if(state.catFilter !== null && t.category !== state.catFilter) return false;
+  if(state.search){
+    const s = state.search.toLowerCase();
+    const hay = `${t.title} ${t.description} ${t.src_ip||""} ${t.dst_ip||""} ${t.user||""} ${t.category}`.toLowerCase();
+    if(!hay.includes(s)) return false;
+  }
+  return true;
+}
+
+function renderQueue(){
+  const filtered = state.tickets
+    .filter(matchesFilters)
+    .sort((a,b) => (SEV_ORDER[a.severity]-SEV_ORDER[b.severity]) || (a.status==="open"?-1:1));
+
+  document.getElementById("queueCount").textContent = `${filtered.length} shown / ${state.tickets.length} total`;
+
+  const list = document.getElementById("ticketList");
+  if(filtered.length === 0){
+    list.innerHTML = `<div class="empty"><div class="big">—</div>No tickets match the current filters.</div>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map(t => {
+    const isOpen = state.expanded.has(t.id);
+    const notesShown = state.notesOpen.has(t.id);
+    const evidenceHtml = t.evidence.map(l => `<div>${escapeHtml(l)}</div>`).join("");
+    const teamOptions = TEAMS.map(team =>
+      `<option value="${team}" ${t.forwarded_to===team?"selected":""}>${team}</option>`
+    ).join("");
+
+    let resolvedTag = "";
+    if(t.status === "closed"){
+      resolvedTag = `<div class="resolved-tag">Closed${t.analyst_notes ? " — " + escapeHtml(t.analyst_notes) : ""}</div>`;
+    } else if(t.status === "forwarded"){
+      resolvedTag = `<div class="resolved-tag">Forwarded to ${escapeHtml(t.forwarded_to||"")}${t.analyst_notes ? " — " + escapeHtml(t.analyst_notes) : ""}</div>`;
+    }
+
+    return `
+    <div class="ticket sev-${t.severity} status-${t.status} ${isOpen?'expanded':''}" data-id="${t.id}">
+      <div class="ticket-row" onclick="toggleExpand('${t.id}')">
+        <div class="sev-badge ${t.severity}">${t.severity}</div>
+        <div class="ticket-title">
+          <div class="t">${escapeHtml(t.title)}</div>
+          <div class="m">${t.id} · ${escapeHtml(t.timestamp)}</div>
+        </div>
+        <div class="ticket-cat">${escapeHtml(t.category)}</div>
+        <div class="ticket-status ${t.status}">${t.status}</div>
+        <div class="chevron">&#9656;</div>
+      </div>
+      <div class="ticket-body">
+        <div class="tb-section">
+          <div class="tb-label">Description</div>
+          <div class="tb-desc">${escapeHtml(t.description)}</div>
+        </div>
+        <div class="tb-section">
+          <div class="tb-label">Recommended action</div>
+          <div class="tb-action">${escapeHtml(t.recommended_action)}</div>
+        </div>
+        <div class="tb-meta">
+          ${t.src_ip ? `<span><b>src</b>${t.src_ip}</span>` : ""}
+          ${t.dst_ip ? `<span><b>dst</b>${t.dst_ip}</span>` : ""}
+          ${t.user ? `<span><b>user</b>${escapeHtml(t.user)}</span>` : ""}
+          <span><b>events</b>${t.event_count}</span>
+        </div>
+        <div class="tb-section">
+          <div class="tb-label">Raw evidence (${t.evidence.length} of ${t.event_count} logged)</div>
+          <div class="evidence">${evidenceHtml}</div>
+        </div>
+
+        ${t.status === "open" ? `
+        <div class="tb-actions">
+          <button class="act close-btn" onclick="event.stopPropagation(); closeTicket('${t.id}')">Close ticket</button>
+          <button class="act forward-btn" onclick="event.stopPropagation(); toggleForwardUI('${t.id}')">Forward</button>
+          <select class="fwd-select" id="team-${t.id}" onclick="event.stopPropagation()">${teamOptions}</select>
+          <button class="act" onclick="event.stopPropagation(); confirmForward('${t.id}')" style="display:none" id="fwd-confirm-${t.id}">Confirm forward</button>
+        </div>
+        <div class="notes-row ${notesShown?'show':''}" id="notes-row-${t.id}">
+          <textarea class="notes" id="notes-${t.id}" placeholder="Analyst notes (optional)...">${escapeHtml(t.analyst_notes||"")}</textarea>
+        </div>
+        ` : `
+        <div class="tb-actions">
+          <button class="act reopen-btn" onclick="event.stopPropagation(); reopenTicket('${t.id}')">Reopen</button>
+        </div>
+        ${resolvedTag}
+        `}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function escapeHtml(s){
+  if(s === null || s === undefined) return "";
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function toggleSev(s){
+  if(state.sevFilter.has(s)) state.sevFilter.delete(s); else state.sevFilter.add(s);
+  render();
+}
+function toggleStatus(s){
+  if(state.statusFilter.has(s)) state.statusFilter.delete(s); else state.statusFilter.add(s);
+  render();
+}
+function setCat(c){ state.catFilter = c; render(); }
+
+function toggleExpand(id){
+  if(state.expanded.has(id)) state.expanded.delete(id); else state.expanded.add(id);
+  render();
+}
+
+function findTicket(id){ return state.tickets.find(t=>t.id===id); }
+
+function closeTicket(id){
+  const t = findTicket(id);
+  const notesEl = document.getElementById(`notes-${id}`);
+  t.analyst_notes = notesEl ? notesEl.value : t.analyst_notes;
+  t.status = "closed";
+  render();
+}
+
+function reopenTicket(id){
+  const t = findTicket(id);
+  t.status = "open";
+  t.forwarded_to = null;
+  state.expanded.add(id);
+  render();
+}
+
+function toggleForwardUI(id){
+  if(state.notesOpen.has(id)) state.notesOpen.delete(id); else state.notesOpen.add(id);
+  const el = document.getElementById(`fwd-confirm-${id}`);
+  if(el) el.style.display = el.style.display === "none" ? "inline-block" : "none";
+  render();
+  state.expanded.add(id);
+}
+
+function confirmForward(id){
+  const t = findTicket(id);
+  const teamSel = document.getElementById(`team-${id}`);
+  const notesEl = document.getElementById(`notes-${id}`);
+  t.forwarded_to = teamSel ? teamSel.value : TEAMS[0];
+  t.analyst_notes = notesEl ? notesEl.value : t.analyst_notes;
+  t.status = "forwarded";
+  render();
+}
+
+render();
+</script>
+</body>
+</html>

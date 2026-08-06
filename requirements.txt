@@ -1,0 +1,3 @@
+anthropic>=0.40.0
+# or, if using OpenAI instead:
+# openai>=1.50.0
