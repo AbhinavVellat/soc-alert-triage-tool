@@ -373,7 +373,7 @@ function renderQueue(){
           <button class="act close-btn" onclick="event.stopPropagation(); closeTicket('${t.id}')">Close ticket</button>
           <button class="act forward-btn" onclick="event.stopPropagation(); toggleForwardUI('${t.id}')">Forward</button>
           <select class="fwd-select" id="team-${t.id}" onclick="event.stopPropagation()">${teamOptions}</select>
-          <button class="act" onclick="event.stopPropagation(); confirmForward('${t.id}')" style="display:none" id="fwd-confirm-${t.id}">Confirm forward</button>
+          <button class="act" onclick="event.stopPropagation(); confirmForward('${t.id}')" style="display:${notesShown ? 'inline-block' : 'none'}" id="fwd-confirm-${t.id}">Confirm forward</button>
         </div>
         <div class="notes-row ${notesShown?'show':''}" id="notes-row-${t.id}">
           <textarea class="notes" id="notes-${t.id}" placeholder="Analyst notes (optional)...">${escapeHtml(t.analyst_notes||"")}</textarea>

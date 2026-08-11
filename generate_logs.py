@@ -30,7 +30,11 @@ SERVERS = {
 USERS = ["jsmith", "agarcia", "mchen", "root", "admin", "backup_svc", "rwilson", "tpatel"]
 
 EXTERNAL_IPS_BENIGN = [f"172.217.{random.randint(0,255)}.{random.randint(0,255)}" for _ in range(20)]
-EXTERNAL_IPS_MALICIOUS = ["185.220.101.47", "45.155.204.12", "194.36.190.53", "91.219.237.244"]
+EXTERNAL_IPS_MALICIOUS = [
+    "185.220.101.47", "45.155.204.12", "194.36.190.53", "91.219.237.244",
+    "89.248.165.74", "193.106.31.98", "5.188.62.140", "80.94.95.116",
+    "185.220.102.8", "146.70.184.33",
+]
 
 lines_fw = []
 lines_auth = []
@@ -79,6 +83,19 @@ for i in range(60):
 t_cursor = int(scan_start) + 80
 
 # ---------------------------------------------------------------
+# 2a-extra. Two more port scans, different scanners/targets, for more variety
+# ---------------------------------------------------------------
+for scanner2, target2 in [(EXTERNAL_IPS_MALICIOUS[4], "10.0.0.20"), (EXTERNAL_IPS_MALICIOUS[5], "10.0.0.40")]:
+    scan2_start = t_cursor + 150
+    for i in range(40):
+        t = scan2_start + i * random.uniform(0.2, 1.2)
+        lines_fw.append(
+            f"{fmt_fw(ts(t))} fw01 kernel: ACTION=DENY PROTO=TCP "
+            f"SRC={scanner2} DST={target2} SPT={random.randint(1024,65000)} DPT={random.randint(1,1024)}"
+        )
+    t_cursor = int(scan2_start) + 60
+
+# ---------------------------------------------------------------
 # 2b. Moderate deny burst - below full port-scan threshold (medium severity)
 # ---------------------------------------------------------------
 mod_start = t_cursor + 150
@@ -91,6 +108,24 @@ for i, port in enumerate([25, 587, 993, 143, 110, 465, 21]):
         f"SRC={mod_src} DST={mod_target} SPT={random.randint(1024,65000)} DPT={port}"
     )
 t_cursor = int(mod_start) + 100
+
+# ---------------------------------------------------------------
+# 2b-extra. Two more moderate deny bursts (medium severity) for balance
+# ---------------------------------------------------------------
+for mod_src2, mod_target2, ports in [
+    ("172.217.44.12", "10.0.0.20", [3306, 5432, 27017, 6379, 9200]),
+    ("172.217.88.9", "10.0.0.11", [22, 3389, 5900, 8080, 8443]),
+    ("172.217.51.3", "10.0.0.10", [21, 23, 445, 1433, 5985]),
+    ("172.217.19.60", "10.0.0.30", [88, 389, 636, 3268, 88]),
+]:
+    mod2_start = t_cursor + 120
+    for i, port in enumerate(ports):
+        t = mod2_start + i * random.uniform(3, 10)
+        lines_fw.append(
+            f"{fmt_fw(ts(t))} fw01 kernel: ACTION=DENY PROTO=TCP "
+            f"SRC={mod_src2} DST={mod_target2} SPT={random.randint(1024,65000)} DPT={port}"
+        )
+    t_cursor = int(mod2_start) + 80
 
 # ---------------------------------------------------------------
 # 3. Normal + failed SSH auth traffic
@@ -132,6 +167,19 @@ lines_auth.append(
 auth_cursor = int(bf_start + 45 * 3 + 60)
 
 # ---------------------------------------------------------------
+# 4a-extra. Two more brute-force sources, different targets/users
+# ---------------------------------------------------------------
+for brute_src2, target_user in [(EXTERNAL_IPS_MALICIOUS[6], "backup_svc"), (EXTERNAL_IPS_MALICIOUS[7], "mchen"), (EXTERNAL_IPS_MALICIOUS[8], "rwilson")]:
+    bf2_start = auth_cursor + 100
+    for i in range(30):
+        t = bf2_start + i * random.uniform(1, 4)
+        lines_auth.append(
+            f"{fmt_auth(ts(t))} dc01 sshd[{random.randint(1000,9999)}]: "
+            f"Failed password for {target_user} from {brute_src2} port {random.randint(1024,65000)} ssh2"
+        )
+    auth_cursor = int(bf2_start + 30 * 3 + 40)
+
+# ---------------------------------------------------------------
 # 4b. Moderate failed-login pattern (below brute-force threshold, likely a typo)
 # ---------------------------------------------------------------
 typo_start = auth_cursor + 100
@@ -147,6 +195,23 @@ lines_auth.append(
     f"Accepted password for tpatel from {typo_src} port {random.randint(1024,65000)} ssh2"
 )
 auth_cursor = int(typo_start + 5*30 + 60)
+
+# ---------------------------------------------------------------
+# 4b-extra. Two more moderate/low failed-login patterns for balance
+# ---------------------------------------------------------------
+for typo_src2, typo_user2, n in [("10.0.3.44", "jsmith", 4), ("10.0.9.12", "agarcia", 6), ("10.0.11.5", "rwilson", 5)]:
+    t2_start = auth_cursor + 80
+    for i in range(n):
+        t = t2_start + i * random.uniform(15, 45)
+        lines_auth.append(
+            f"{fmt_auth(ts(t))} dc01 sshd[{random.randint(1000,9999)}]: "
+            f"Failed password for {typo_user2} from {typo_src2} port {random.randint(1024,65000)} ssh2"
+        )
+    lines_auth.append(
+        f"{fmt_auth(ts(t2_start + n*30 + 10))} dc01 sshd[{random.randint(1000,9999)}]: "
+        f"Accepted password for {typo_user2} from {typo_src2} port {random.randint(1024,65000)} ssh2"
+    )
+    auth_cursor = int(t2_start + n*30 + 50)
 
 # ---------------------------------------------------------------
 # 5. IDS alerts: mix of low-priority noise + real signatures
@@ -174,6 +239,22 @@ for _ in range(60):
         f"[Classification: Not Suspicious Traffic] [Priority: {prio}] "
         f"{{TCP}} {src}:{random.randint(1024,65000)} -> {dst}:{random.choice([80,443,53])}"
     )
+
+# ---------------------------------------------------------------
+# 5a-extra. Concentrated noise cluster at one src/dst pair -- crosses the
+# low-severity ticket threshold (20+ events) for one more low ticket
+# ---------------------------------------------------------------
+noise_src = "10.0.4.19"
+noise_dst = EXTERNAL_IPS_BENIGN[3]
+noise_start = ids_cursor + 100
+for i in range(24):
+    t = noise_start + i * random.uniform(5, 20)
+    lines_ids.append(
+        f"{fmt_ids(ts(t))} [**] [1:2001219:1] ET SCAN Potential SSH Scan [**] "
+        f"[Classification: Not Suspicious Traffic] [Priority: 3] "
+        f"{{TCP}} {noise_src}:{random.randint(1024,65000)} -> {noise_dst}:22"
+    )
+ids_cursor = int(noise_start + 24 * 20 + 30)
 
 # real malware beacon pattern - periodic C2 checkins
 c2_target = EXTERNAL_IPS_MALICIOUS[2]
@@ -210,6 +291,56 @@ lines_ids.append(
     f"{fmt_ids(ts(sqli_start + 400))} [**] [1:2027056:1] {attack_sigs[2][1]} [**] "
     f"[Classification: A Network Trojan was Detected] [Priority: 1] "
     f"{{TCP}} 10.0.0.20:51900 -> {EXTERNAL_IPS_MALICIOUS[1]}:8443"
+)
+ids_cursor = int(sqli_start + 420)
+
+# ---------------------------------------------------------------
+# 5-extra. More IDS variety: second beacon, second Log4Shell target,
+# an XSS attempt (new signature type), a second SQLi cluster, second exfil
+# ---------------------------------------------------------------
+beacon2_target = EXTERNAL_IPS_MALICIOUS[8]
+victim2 = "10.0.0.40"
+beacon2_start = ids_cursor + 150
+for i in range(8):
+    t = beacon2_start + i * 55
+    lines_ids.append(
+        f"{fmt_ids(ts(t))} [**] [1:2024766:2] {attack_sigs[0][1]} [**] "
+        f"[Classification: A Network Trojan was Detected] [Priority: 1] "
+        f"{{TCP}} {victim2}:{random.randint(1024,65000)} -> {beacon2_target}:443"
+    )
+ids_cursor = int(beacon2_start + 8 * 55 + 30)
+
+lines_ids.append(
+    f"{fmt_ids(ts(ids_cursor + 20))} [**] [1:2023924:3] {attack_sigs[1][1]} [**] "
+    f"[Classification: Attempted Administrator Privilege Gain] [Priority: 1] "
+    f"{{TCP}} {EXTERNAL_IPS_MALICIOUS[9]}:52210 -> 10.0.0.11:443"
+)
+ids_cursor += 60
+
+xss_src = EXTERNAL_IPS_MALICIOUS[4]
+for i in range(5):
+    t = ids_cursor + i * random.uniform(3, 8)
+    lines_ids.append(
+        f"{fmt_ids(ts(t))} [**] [1:2018961:5] ET WEB_SERVER Possible XSS Attempt in URI [**] "
+        f"[Classification: Web Application Attack] [Priority: 1] "
+        f"{{TCP}} {xss_src}:41220 -> 10.0.0.10:443"
+    )
+ids_cursor += 100
+
+sqli2_start = ids_cursor
+for i in range(6):
+    t = sqli2_start + i * random.uniform(2, 10)
+    lines_ids.append(
+        f"{fmt_ids(ts(t))} [**] [1:2100498:8] {attack_sigs[3][1]} [**] "
+        f"[Classification: Web Application Attack] [Priority: 1] "
+        f"{{TCP}} {EXTERNAL_IPS_MALICIOUS[5]}:44890 -> 10.0.0.11:3306"
+    )
+ids_cursor = int(sqli2_start + 200)
+
+lines_ids.append(
+    f"{fmt_ids(ts(ids_cursor + 30))} [**] [1:2027056:1] {attack_sigs[2][1]} [**] "
+    f"[Classification: A Network Trojan was Detected] [Priority: 1] "
+    f"{{TCP}} 10.0.0.11:52011 -> {EXTERNAL_IPS_MALICIOUS[6]}:8443"
 )
 
 # sort each log by embedded timestamp isn't necessary for realism (logs are already
